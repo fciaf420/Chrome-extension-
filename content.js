@@ -62,6 +62,19 @@ async function fetchTokenBalances(owner) {
   return apiRequest(`${API_BASE}/token/balance?owner=${owner}`);
 }
 
+const JUP_API_KEY = "3856bf2f-4df9-448c-b1cd-99600be781cc";
+
+async function fetchJupiterTokenInfo(mintAddresses) {
+  if (!mintAddresses.length) return [];
+  // Jupiter search supports comma-separated mint addresses (up to 100)
+  const query = mintAddresses.slice(0, 100).join(",");
+  const res = await fetch(`https://api.jup.ag/tokens/v2/search?query=${query}`, {
+    headers: { "x-api-key": JUP_API_KEY },
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
 async function fetchHistoricalPositions(owner, fromDate, toDate) {
   let url = `${API_BASE}/lp-positions/historical?owner=${owner}&limit=20`;
   if (fromDate) url += `&from_date=${fromDate.toISOString()}`;
@@ -72,6 +85,99 @@ async function fetchHistoricalPositions(owner, fromDate, toDate) {
 function shortenAddress(addr) {
   if (!addr) return "";
   return addr.slice(0, 4) + "..." + addr.slice(-4);
+}
+
+// Extract a value from a field that may be a number or an object with time-range keys
+function ovVal(field) {
+  if (field == null) return null;
+  if (typeof field === "number") return field;
+  if (typeof field === "object") {
+    for (const k of ["all", "total", "7D", "1M", "30D"]) {
+      if (field[k] != null) return field[k];
+    }
+    const vals = Object.values(field).filter(v => typeof v === "number");
+    if (vals.length) return vals[0];
+  }
+  return null;
+}
+
+// Wallet scoring algorithm (0-100) based on overview metrics
+// Weighs: profitability, consistency, experience, risk management
+function computeWalletScore(ov) {
+  if (!ov) return null;
+
+  let score = 0;
+
+  // 1. Win Rate (0-25 pts) - most important signal
+  const winRate = ovVal(ov.win_rate);
+  if (winRate != null) {
+    // 50% win rate = 10pts, 70% = 20pts, 90%+ = 25pts
+    score += Math.min(winRate * 100 / 4, 25);
+  }
+
+  // 2. ROI (0-20 pts) - profitability per dollar
+  const roi = ov.roi;
+  if (roi != null) {
+    // Positive ROI gets points, diminishing returns above 5%
+    if (roi > 0) {
+      score += Math.min(roi * 100 * 2, 20);
+    } else {
+      // Negative ROI deducts up to -5 pts
+      score += Math.max(roi * 100, -5);
+    }
+  }
+
+  // 3. Experience / Volume (0-15 pts) - based on total positions
+  const totalLp = parseInt(ov.total_lp) || 0;
+  if (totalLp >= 100) score += 15;
+  else if (totalLp >= 50) score += 12;
+  else if (totalLp >= 20) score += 9;
+  else if (totalLp >= 10) score += 6;
+  else if (totalLp >= 3) score += 3;
+
+  // 4. Fee efficiency (0-10 pts) - fees as % of inflow
+  const feePct = ov.fee_percent;
+  if (feePct != null && feePct > 0) {
+    // Good fee capture = points
+    score += Math.min(feePct * 100 * 10, 10);
+  }
+
+  // 5. Consistency / Monthly profitability (0-15 pts)
+  const monthlyPct = ov.avg_monthly_profit_percent;
+  if (monthlyPct != null) {
+    if (monthlyPct > 0) {
+      score += Math.min(monthlyPct * 100 * 5, 15);
+    } else {
+      score += Math.max(monthlyPct * 100 * 2, -5);
+    }
+  }
+
+  // 6. Diversification (0-10 pts) - number of pools
+  const totalPools = parseInt(ov.total_pool) || 0;
+  if (totalPools >= 20) score += 10;
+  else if (totalPools >= 10) score += 8;
+  else if (totalPools >= 5) score += 5;
+  else if (totalPools >= 2) score += 2;
+
+  // 7. Longevity bonus (0-5 pts) - older wallets get trust bonus
+  if (ov.first_activity) {
+    const ageMonths = (Date.now() - new Date(ov.first_activity).getTime()) / (30 * 24 * 60 * 60 * 1000);
+    if (ageMonths >= 6) score += 5;
+    else if (ageMonths >= 3) score += 3;
+    else if (ageMonths >= 1) score += 1;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function getScoreLabel(score) {
+  if (score == null) return { label: "?", color: "#64748b" };
+  if (score >= 80) return { label: "A+", color: "#4ade80" };
+  if (score >= 65) return { label: "A", color: "#4ade80" };
+  if (score >= 50) return { label: "B", color: "#a3e635" };
+  if (score >= 35) return { label: "C", color: "#fbbf24" };
+  if (score >= 20) return { label: "D", color: "#fb923c" };
+  return { label: "F", color: "#f87171" };
 }
 
 function formatUsd(val) {
@@ -143,21 +249,34 @@ function formatSol(val) {
 function renderOverviewCard(ov) {
   if (!ov) return '<div class="tlw-overview-card"><div class="tlw-empty">Overview data unavailable.</div></div>';
 
-  const pnlClass = (ov.total_pnl?.all ?? 0) >= 0 ? "tlw-positive" : "tlw-negative";
-  const winRate = ov.win_rate?.all != null ? (ov.win_rate.all * 100).toFixed(1) + "%" : "-";
+  console.log("[TLW] Overview data:", JSON.stringify(ov).slice(0, 2000));
+
+  const totalPnl = ovVal(ov.total_pnl);
+  const pnlClass = (totalPnl ?? 0) >= 0 ? "tlw-positive" : "tlw-negative";
+  const winRateVal = ovVal(ov.win_rate);
+  const winRate = winRateVal != null ? (winRateVal * 100).toFixed(1) + "%" : "-";
   const apr = ov.apr != null ? (ov.apr * 100).toFixed(1) + "%" : "-";
   const roi = ov.roi != null ? (ov.roi * 100).toFixed(2) + "%" : "-";
   const feePercent = ov.fee_percent != null ? (ov.fee_percent * 100).toFixed(2) + "%" : "-";
   const avgMonthlyPct = ov.avg_monthly_profit_percent != null ? (ov.avg_monthly_profit_percent * 100).toFixed(2) + "%" : "-";
 
+  const score = computeWalletScore(ov);
+  const scoreInfo = getScoreLabel(score);
+
   return `
     <div class="tlw-overview-card">
       <div class="tlw-overview-section">
-        <div class="tlw-overview-title">Wallet Profile</div>
+        <div class="tlw-overview-title">
+          Wallet Profile
+          <div class="tlw-score-badge" style="background: ${scoreInfo.color}20; border-color: ${scoreInfo.color}">
+            <span class="tlw-score-number" style="color: ${scoreInfo.color}">${score ?? "?"}</span>
+            <span class="tlw-score-grade" style="color: ${scoreInfo.color}">${scoreInfo.label}</span>
+          </div>
+        </div>
         <div class="tlw-overview-grid">
           <div class="tlw-ov-stat">
             <span class="tlw-ov-label">Total PnL</span>
-            <span class="tlw-ov-value ${pnlClass}">${formatUsd(ov.total_pnl?.all)}</span>
+            <span class="tlw-ov-value ${pnlClass}">${formatUsd(totalPnl)}</span>
           </div>
           <div class="tlw-ov-stat">
             <span class="tlw-ov-label">Total Inflow</span>
@@ -165,7 +284,7 @@ function renderOverviewCard(ov) {
           </div>
           <div class="tlw-ov-stat">
             <span class="tlw-ov-label">Total Fees</span>
-            <span class="tlw-ov-value">${formatUsd(ov.total_fee?.all)}</span>
+            <span class="tlw-ov-value">${formatUsd(ovVal(ov.total_fee))}</span>
           </div>
           <div class="tlw-ov-stat">
             <span class="tlw-ov-label">Win Rate</span>
@@ -225,43 +344,130 @@ function renderOverviewCard(ov) {
   `;
 }
 
-function renderOpeningPositions(positions) {
-  if (!positions || !positions.length) return "";
+function initOpeningPositions(positions, parentEl) {
+  if (!positions || !positions.length) return;
 
-  const items = positions.map(p => {
+  const section = document.createElement("div");
+  section.className = "tlw-positions-section";
+  section.innerHTML = `
+    <div class="tlw-positions-title">
+      Open Positions <span class="tlw-positions-count">${positions.length}</span>
+    </div>
+  `;
+
+  const list = document.createElement("div");
+  list.className = "tlw-pos-list";
+
+  positions.forEach(p => {
     const pnlVal = p.pnl?.total ?? 0;
     const pnlClass = pnlVal >= 0 ? "tlw-positive" : "tlw-negative";
     const rangeClass = p.inRange ? "tlw-in-range" : "tlw-out-range";
     const rangeText = p.inRange ? "IN RANGE" : "OUT";
-    return `
-      <div class="tlw-pos-item">
-        <div class="tlw-pos-logos">
-          <img src="${p.logo0}" alt="" onerror="this.style.display='none'">
-          <img src="${p.logo1}" alt="" onerror="this.style.display='none'">
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "tlw-pos-accordion";
+
+    // Summary row (always visible)
+    const summary = document.createElement("div");
+    summary.className = "tlw-pos-item tlw-pos-expandable";
+    summary.innerHTML = `
+      <div class="tlw-pos-logos">
+        <img src="${p.logo0 || ''}" alt="" onerror="this.style.display='none'">
+        <img src="${p.logo1 || ''}" alt="" onerror="this.style.display='none'">
+      </div>
+      <div>
+        <div class="tlw-pos-pair">${p.pairName || ((p.tokenName0 || "?") + "/" + (p.tokenName1 || "?"))}</div>
+        <div class="tlw-pos-detail">${p.age ? p.age + "d" : "-"} · <span class="${rangeClass}">${rangeText}</span></div>
+      </div>
+      <div class="tlw-pos-value">${formatUsd(p.value)}</div>
+      <div class="tlw-pos-pnl ${pnlClass}">${formatUsd(pnlVal)}</div>
+      <div class="tlw-pos-fee">${formatUsd(p.collectedFee)}</div>
+      <div class="tlw-pos-chevron">&#9662;</div>
+    `;
+    wrapper.appendChild(summary);
+
+    // Detail panel (hidden by default)
+    const priceRange = p.priceRange || [];
+    const binRange = p.range || [];
+    const detail = document.createElement("div");
+    detail.className = "tlw-pos-detail-panel";
+    detail.style.display = "none";
+    detail.innerHTML = `
+      <div class="tlw-pos-detail-grid">
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Input Value</span>
+          <span>${formatUsd(p.inputValue)}</span>
         </div>
-        <div>
-          <div class="tlw-pos-pair">${p.pairName || (p.tokenName0 + "/" + p.tokenName1)}</div>
-          <div class="tlw-pos-detail">${p.age ? p.age + "d" : "-"} · <span class="${rangeClass}">${rangeText}</span></div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Current Value</span>
+          <span>${formatUsd(p.value)}</span>
         </div>
-        <div class="tlw-pos-value">${formatUsd(p.value)}</div>
-        <div class="tlw-pos-pnl ${pnlClass}">${formatUsd(pnlVal)}</div>
-        <div class="tlw-pos-fee">${formatUsd(p.collectedFee)}</div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Fees Collected</span>
+          <span>${formatUsd(p.collectedFee)}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Uncollected Fees</span>
+          <span>${formatUsd(p.unCollectedFee)}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Strategy</span>
+          <span>${p.strategyType || "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">DPR</span>
+          <span>${p.dpr != null ? (p.dpr * 100).toFixed(2) + "%" : "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Bin Range</span>
+          <span>${binRange.length >= 2 ? binRange[0] + " → " + binRange[1] : "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Current Bin</span>
+          <span>${binRange.length >= 3 ? binRange[2] : "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Price Range</span>
+          <span>${priceRange.length >= 2 ? "$" + priceRange[0].toFixed(4) + " – $" + priceRange[1].toFixed(4) : "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Current Price</span>
+          <span>${priceRange.length >= 3 ? "$" + priceRange[2].toFixed(4) : "-"}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Pool</span>
+          <span class="tlw-pos-pool-link">${shortenAddress(p.pool)}</span>
+        </div>
+        <div class="tlw-pos-detail-item">
+          <span class="tlw-ov-label">Opened</span>
+          <span>${p.createdAt ? formatDate(p.createdAt) : "-"}</span>
+        </div>
       </div>
     `;
-  }).join("");
+    wrapper.appendChild(detail);
 
-  return `
-    <div class="tlw-positions-section">
-      <div class="tlw-positions-title">
-        Open Positions <span class="tlw-positions-count">${positions.length}</span>
-      </div>
-      <div class="tlw-pos-list">${items}</div>
-    </div>
-  `;
+    // Toggle accordion
+    summary.addEventListener("click", () => {
+      const isOpen = detail.style.display !== "none";
+      detail.style.display = isOpen ? "none" : "";
+      summary.querySelector(".tlw-pos-chevron").innerHTML = isOpen ? "&#9662;" : "&#9652;";
+    });
+
+    list.appendChild(wrapper);
+  });
+
+  section.appendChild(list);
+  parentEl.appendChild(section);
 }
 
-function renderTokenBalances(balances) {
+function renderTokenBalances(balances, jupData) {
   if (!balances || !balances.length) return "";
+
+  // Build Jupiter lookup by mint address
+  const jupMap = {};
+  if (jupData && jupData.length) {
+    jupData.forEach(t => { jupMap[t.id] = t; });
+  }
 
   // Sort by USD value descending, filter out dust
   const sorted = balances
@@ -274,12 +480,21 @@ function renderTokenBalances(balances) {
 
   const items = sorted.slice(0, 12).map(t => {
     const pct = totalUsd > 0 ? ((t.balanceInUsd / totalUsd) * 100).toFixed(1) : "0";
+    const jup = jupMap[t.tokenAddress];
+    const change24h = jup?.stats24h?.priceChange;
+    const changeClass = change24h != null ? (change24h >= 0 ? "tlw-positive" : "tlw-negative") : "";
+    const changeText = change24h != null ? (change24h >= 0 ? "+" : "") + change24h.toFixed(1) + "%" : "";
+    const mcapText = jup?.mcap ? "$" + (jup.mcap >= 1e9 ? (jup.mcap / 1e9).toFixed(1) + "B" : jup.mcap >= 1e6 ? (jup.mcap / 1e6).toFixed(1) + "M" : (jup.mcap / 1e3).toFixed(0) + "K") : "";
     return `
       <div class="tlw-token-item">
-        <img class="tlw-token-logo" src="${t.logo || ''}" alt="" onerror="this.style.display='none'">
-        <div class="tlw-token-name">${t.symbol || shortenAddress(t.tokenAddress)}</div>
+        <img class="tlw-token-logo" src="${jup?.icon || t.logo || ''}" alt="" onerror="this.style.display='none'">
+        <div class="tlw-token-info">
+          <div class="tlw-token-name">${t.symbol || shortenAddress(t.tokenAddress)}</div>
+          ${mcapText ? `<div class="tlw-token-mcap">MC ${mcapText}</div>` : ""}
+        </div>
         <div class="tlw-token-bal">${Number(t.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
         <div class="tlw-token-usd">${formatUsd(t.balanceInUsd)}</div>
+        <div class="tlw-token-change ${changeClass}">${changeText}</div>
         <div class="tlw-token-pct">${pct}%</div>
       </div>
     `;
@@ -530,7 +745,7 @@ function initHistoricalSection(owner, initialPositions) {
   return section;
 }
 
-function renderRevenueView(owner, revenueData, overviewData, openingPositions, tokenBalances, historicalPositions, onBack) {
+function renderRevenueView(owner, revenueData, overviewData, openingPositions, tokenBalances, historicalPositions, jupData, onBack) {
   const body = document.getElementById("tlw-body");
   const header = document.getElementById("tlw-header-content");
 
@@ -549,12 +764,12 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
 
   // Build static HTML sections
   const overviewHtml = renderOverviewCard(overviewData);
-  const positionsHtml = renderOpeningPositions(openingPositions);
-  const tokensHtml = renderTokenBalances(tokenBalances);
+  // openingPositions rendered via DOM below
+  const tokensHtml = renderTokenBalances(tokenBalances, jupData);
 
   if (!data || !data.length) {
-    body.innerHTML = overviewHtml + tokensHtml + positionsHtml;
-    // Append interactive historical section
+    body.innerHTML = overviewHtml + tokensHtml;
+    initOpeningPositions(openingPositions, body);
     body.appendChild(initHistoricalSection(owner, historicalPositions));
     const emptyMsg = document.createElement("div");
     emptyMsg.className = "tlw-empty";
@@ -586,7 +801,7 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
         </td>
         <td class="${d.sum >= 0 ? 'tlw-positive' : 'tlw-negative'}">${formatUsd(d.sum)}</td>
         <td class="${cumClass}">${formatUsd(d.cumulative_pnl)}</td>
-        <td>${formatUsd(d.max_invested)}</td>
+        <td>${formatUsd(d.max_invested || d.total_invested)}</td>
         <td>${formatPercent(d.pnl_percent * 100)}</td>
       </tr>
     `;
@@ -596,7 +811,7 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
   body.innerHTML = `
     ${overviewHtml}
     ${tokensHtml}
-    ${positionsHtml}
+    <div id="tlw-pos-anchor"></div>
     <div id="tlw-hist-anchor"></div>
     <div class="tlw-revenue-summary">
       <div class="tlw-stat">
@@ -608,8 +823,8 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
         <span class="tlw-stat-value ${pnlClass}">${totalPnlNative != null ? totalPnlNative.toFixed(4) : '-'} SOL</span>
       </div>
       <div class="tlw-stat">
-        <span class="tlw-stat-label">Max Invested</span>
-        <span class="tlw-stat-value">${formatUsd(latest.max_invested)}</span>
+        <span class="tlw-stat-label">Invested</span>
+        <span class="tlw-stat-value">${formatUsd(latest.max_invested || latest.total_invested)}</span>
       </div>
     </div>
     <div class="tlw-range-toggle">
@@ -631,7 +846,16 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
     </table>
   `;
 
-  // Insert interactive historical section at the anchor point
+  // Insert interactive DOM sections at anchor points
+  const posAnchor = document.getElementById("tlw-pos-anchor");
+  if (openingPositions && openingPositions.length) {
+    const posSection = document.createElement("div");
+    initOpeningPositions(openingPositions, posSection);
+    posAnchor.replaceWith(posSection);
+  } else {
+    posAnchor.remove();
+  }
+
   const anchor = document.getElementById("tlw-hist-anchor");
   anchor.replaceWith(initHistoricalSection(owner, historicalPositions));
 
@@ -644,7 +868,7 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
       body.innerHTML = '<div class="tlw-loading">Loading...</div>';
       try {
         const result = await fetchRevenue(owner, "day", range);
-        renderRevenueView(owner, result.data, overviewData, openingPositions, tokenBalances, historicalPositions, onBack);
+        renderRevenueView(owner, result.data, overviewData, openingPositions, tokenBalances, historicalPositions, jupData, onBack);
         const newBtn = body.querySelector(`.tlw-range-btn[data-range="${range}"]`);
         if (newBtn) {
           body.querySelectorAll(".tlw-range-btn").forEach(b => b.classList.remove("tlw-range-active"));
@@ -657,6 +881,41 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
   });
 }
 
+// Quick score from pool-level top-lpers data (subset of full score)
+function computePoolScore(lp) {
+  let score = 0;
+  // Win rate (0-25)
+  if (lp.win_rate != null) score += Math.min((lp.win_rate / 100) * 100 / 4, 25);
+  // ROI (0-20)
+  if (lp.roi != null) {
+    if (lp.roi > 0) score += Math.min(lp.roi * 2, 20);
+    else score += Math.max(lp.roi, -5);
+  }
+  // Experience (0-15)
+  const totalLp = lp.total_lp || 0;
+  if (totalLp >= 100) score += 15;
+  else if (totalLp >= 50) score += 12;
+  else if (totalLp >= 20) score += 9;
+  else if (totalLp >= 10) score += 6;
+  else if (totalLp >= 3) score += 3;
+  // Fee efficiency (0-10)
+  if (lp.fee_percent != null && lp.fee_percent > 0) score += Math.min(lp.fee_percent * 10, 10);
+  // Longevity (0-5)
+  if (lp.first_activity) {
+    const months = (Date.now() - new Date(lp.first_activity).getTime()) / (30 * 24 * 60 * 60 * 1000);
+    if (months >= 6) score += 5;
+    else if (months >= 3) score += 3;
+    else if (months >= 1) score += 1;
+  }
+  // PnL bonus (0-10)
+  if (lp.total_pnl > 0) score += Math.min(10, 5 + Math.log10(lp.total_pnl + 1));
+  // Diversification proxy from avg_age (0-5) - longer avg = more patient
+  if (lp.avg_age_hour != null && lp.avg_age_hour > 1) score += Math.min(lp.avg_age_hour / 24, 5);
+  // Penalty: negative PnL
+  if (lp.total_pnl < 0) score -= Math.min(10, Math.abs(lp.total_pnl) / 1000);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
 function renderTable(data, onWalletClick) {
   const body = document.getElementById("tlw-body");
   if (!data || !data.length) {
@@ -667,12 +926,15 @@ function renderTable(data, onWalletClick) {
   const rows = data.map((lp, i) => {
     const pnlClass = lp.total_pnl >= 0 ? "tlw-positive" : "tlw-negative";
     const roiClass = lp.roi >= 0 ? "tlw-positive" : "tlw-negative";
+    const score = computePoolScore(lp);
+    const si = getScoreLabel(score);
     return `
       <tr class="tlw-clickable" data-owner="${lp.owner}">
         <td class="tlw-rank">${lp._rank}</td>
         <td class="tlw-address">
           ${shortenAddress(lp.owner)}
         </td>
+        <td class="tlw-score-cell"><span class="tlw-score-pill" style="background:${si.color}20;color:${si.color}">${score} ${si.label}</span></td>
         <td>${formatUsd(lp.total_inflow)}</td>
         <td>${formatUsd(lp.total_fee)}</td>
         <td class="${pnlClass}">${formatUsd(lp.total_pnl)}</td>
@@ -690,6 +952,7 @@ function renderTable(data, onWalletClick) {
         <tr>
           <th>#</th>
           <th>Wallet</th>
+          <th>Score</th>
           <th>Inflow</th>
           <th>Fees</th>
           <th>PnL</th>
@@ -766,6 +1029,15 @@ async function showWalletRevenue(owner, restoreList) {
       fetchTokenBalances(owner).catch(() => null),
       fetchHistoricalPositions(owner, weekAgo, now).catch(() => null),
     ]);
+
+    // Fetch Jupiter enrichment for token balances (non-blocking)
+    const tokenAddresses = (balancesResult?.data || [])
+      .filter(t => t.balanceInUsd > 0.01)
+      .map(t => t.tokenAddress);
+    const jupData = tokenAddresses.length
+      ? await fetchJupiterTokenInfo(tokenAddresses).catch(() => [])
+      : [];
+
     renderRevenueView(
       owner,
       revenueResult.data,
@@ -773,6 +1045,7 @@ async function showWalletRevenue(owner, restoreList) {
       openingResult?.data ?? null,
       balancesResult?.data ?? null,
       historicalResult?.data?.data ?? null,
+      jupData,
       onBack
     );
   } catch (err) {
