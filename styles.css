@@ -358,3 +358,145 @@
   color: #94a3b8;
   white-space: nowrap;
 }
+
+/* Overview card */
+.tlw-overview-card {
+  border-bottom: 1px solid #2d2e4a;
+}
+
+.tlw-overview-section {
+  padding: 14px 20px;
+}
+
+.tlw-overview-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+.tlw-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px 16px;
+}
+
+.tlw-ov-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tlw-ov-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.tlw-ov-value {
+  font-size: 13px;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+/* Opening positions */
+.tlw-positions-section {
+  padding: 14px 20px;
+  border-bottom: 1px solid #2d2e4a;
+}
+
+.tlw-positions-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tlw-positions-count {
+  background: #6366f1;
+  color: #fff;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.tlw-pos-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tlw-pos-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #252640;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.tlw-pos-pair {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.tlw-pos-logos {
+  display: flex;
+  align-items: center;
+}
+
+.tlw-pos-logos img {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid #2d2e4a;
+}
+
+.tlw-pos-logos img:nth-child(2) {
+  margin-left: -6px;
+}
+
+.tlw-pos-detail {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.tlw-pos-value {
+  color: #e2e8f0;
+  font-weight: 600;
+  text-align: right;
+}
+
+.tlw-pos-pnl {
+  font-weight: 600;
+  text-align: right;
+  min-width: 70px;
+}
+
+.tlw-pos-fee {
+  color: #94a3b8;
+  text-align: right;
+  font-size: 11px;
+}
+
+.tlw-in-range {
+  color: #4ade80;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.tlw-out-range {
+  color: #f87171;
+  font-size: 10px;
+  font-weight: 600;
+}

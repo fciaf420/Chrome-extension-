@@ -1,19 +1,27 @@
 const API_BASE = "https://api.lpagent.io/open-api/v1";
-const API_KEY = "lpagent_0e52bfc8744c421ca5fc0a2805c564ad404a22c9fe2a2a13";
+const API_KEYS = [
+  "lpagent_0e52bfc8744c421ca5fc0a2805c564ad404a22c9fe2a2a13",
+  "lpagent_a31bd196e5c67adfc724af89ab3c3d38c93109b41623f7cd",
+  "lpagent_b74eb3129e8b2683a180e41a0e918bd08b332b19bb2b726d",
+];
 const RPM_LIMIT = 5;
-const apiCallTimestamps = [];
+const apiCallTimestamps = {};
+API_KEYS.forEach(k => { apiCallTimestamps[k] = []; });
 
-function canMakeRequest() {
+function getAvailableKey() {
   const now = Date.now();
-  // Remove timestamps older than 60s
-  while (apiCallTimestamps.length && apiCallTimestamps[0] < now - 60000) {
-    apiCallTimestamps.shift();
+  for (const key of API_KEYS) {
+    const stamps = apiCallTimestamps[key];
+    while (stamps.length && stamps[0] < now - 60000) {
+      stamps.shift();
+    }
+    if (stamps.length < RPM_LIMIT) return key;
   }
-  return apiCallTimestamps.length < RPM_LIMIT;
+  return null;
 }
 
-function recordRequest() {
-  apiCallTimestamps.push(Date.now());
+function recordRequest(key) {
+  apiCallTimestamps[key].push(Date.now());
 }
 
 function getPoolIdFromUrl() {
@@ -21,30 +29,33 @@ function getPoolIdFromUrl() {
   return match ? match[1] : null;
 }
 
-async function fetchTopLpers(poolId, page = 1, limit = 20, sortOrder = "desc") {
-  if (!canMakeRequest()) {
-    throw new Error("Rate limit reached (5 req/min). Please wait a moment.");
+async function apiRequest(url) {
+  const key = getAvailableKey();
+  if (!key) {
+    throw new Error("Rate limit reached. Please wait a moment.");
   }
-  recordRequest();
-  const url = `${API_BASE}/pools/${poolId}/top-lpers?sort_order=${sortOrder}&page=${page}&limit=${limit}`;
+  recordRequest(key);
   const res = await fetch(url, {
-    headers: { "x-api-key": API_KEY },
+    headers: { "x-api-key": key },
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
+async function fetchTopLpers(poolId, page = 1, limit = 20, sortOrder = "desc") {
+  return apiRequest(`${API_BASE}/pools/${poolId}/top-lpers?sort_order=${sortOrder}&page=${page}&limit=${limit}`);
+}
+
 async function fetchRevenue(owner, period = "day", range = "7D") {
-  if (!canMakeRequest()) {
-    throw new Error("Rate limit reached (5 req/min). Please wait a moment.");
-  }
-  recordRequest();
-  const url = `${API_BASE}/lp-positions/revenue/${owner}?period=${period}&range=${range}`;
-  const res = await fetch(url, {
-    headers: { "x-api-key": API_KEY },
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
+  return apiRequest(`${API_BASE}/lp-positions/revenue/${owner}?period=${period}&range=${range}`);
+}
+
+async function fetchOverview(owner) {
+  return apiRequest(`${API_BASE}/lp-positions/overview?owner=${owner}&protocol=meteora`);
+}
+
+async function fetchOpeningPositions(owner) {
+  return apiRequest(`${API_BASE}/lp-positions/opening?owner=${owner}`);
 }
 
 function shortenAddress(addr) {
@@ -113,7 +124,132 @@ function formatDate(dateStr) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function renderRevenueView(owner, data, onBack) {
+function formatSol(val) {
+  if (val == null) return "-";
+  return Number(val).toFixed(4) + " SOL";
+}
+
+function renderOverviewCard(ov) {
+  if (!ov) return '<div class="tlw-overview-card"><div class="tlw-empty">Overview data unavailable.</div></div>';
+
+  const pnlClass = (ov.total_pnl?.all ?? 0) >= 0 ? "tlw-positive" : "tlw-negative";
+  const winRate = ov.win_rate?.all != null ? (ov.win_rate.all * 100).toFixed(1) + "%" : "-";
+  const apr = ov.apr != null ? (ov.apr * 100).toFixed(1) + "%" : "-";
+  const roi = ov.roi != null ? (ov.roi * 100).toFixed(2) + "%" : "-";
+  const feePercent = ov.fee_percent != null ? (ov.fee_percent * 100).toFixed(2) + "%" : "-";
+  const avgMonthlyPct = ov.avg_monthly_profit_percent != null ? (ov.avg_monthly_profit_percent * 100).toFixed(2) + "%" : "-";
+
+  return `
+    <div class="tlw-overview-card">
+      <div class="tlw-overview-section">
+        <div class="tlw-overview-title">Wallet Profile</div>
+        <div class="tlw-overview-grid">
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Total PnL</span>
+            <span class="tlw-ov-value ${pnlClass}">${formatUsd(ov.total_pnl?.all)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Total Inflow</span>
+            <span class="tlw-ov-value">${formatUsd(ov.total_inflow)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Total Fees</span>
+            <span class="tlw-ov-value">${formatUsd(ov.total_fee?.all)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Win Rate</span>
+            <span class="tlw-ov-value">${winRate}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">ROI</span>
+            <span class="tlw-ov-value">${roi}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">APR</span>
+            <span class="tlw-ov-value">${apr}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Fee %</span>
+            <span class="tlw-ov-value">${feePercent}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Monthly PnL</span>
+            <span class="tlw-ov-value">${formatUsd(ov.avg_monthly_pnl)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Monthly %</span>
+            <span class="tlw-ov-value">${avgMonthlyPct}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Avg Pos Profit</span>
+            <span class="tlw-ov-value">${formatUsd(ov.avg_pos_profit)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Total Pools</span>
+            <span class="tlw-ov-value">${ov.total_pool ?? "-"}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Positions</span>
+            <span class="tlw-ov-value">${ov.total_lp ?? "-"} (${ov.opening_lp ?? 0} open)</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Win / Total</span>
+            <span class="tlw-ov-value">${ov.win_lp ?? "-"} / ${ov.total_lp ?? "-"}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Avg Age</span>
+            <span class="tlw-ov-value">${formatHours(ov.avg_age_hour)}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">First Active</span>
+            <span class="tlw-ov-value">${ov.first_activity ? formatDate(ov.first_activity) : "-"}</span>
+          </div>
+          <div class="tlw-ov-stat">
+            <span class="tlw-ov-label">Last Active</span>
+            <span class="tlw-ov-value">${ov.last_activity ? formatDate(ov.last_activity) : "-"}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderOpeningPositions(positions) {
+  if (!positions || !positions.length) return "";
+
+  const items = positions.map(p => {
+    const pnlVal = p.pnl?.total ?? 0;
+    const pnlClass = pnlVal >= 0 ? "tlw-positive" : "tlw-negative";
+    const rangeClass = p.inRange ? "tlw-in-range" : "tlw-out-range";
+    const rangeText = p.inRange ? "IN RANGE" : "OUT";
+    return `
+      <div class="tlw-pos-item">
+        <div class="tlw-pos-logos">
+          <img src="${p.logo0}" alt="" onerror="this.style.display='none'">
+          <img src="${p.logo1}" alt="" onerror="this.style.display='none'">
+        </div>
+        <div>
+          <div class="tlw-pos-pair">${p.pairName || (p.tokenName0 + "/" + p.tokenName1)}</div>
+          <div class="tlw-pos-detail">${p.age ? p.age + "d" : "-"} · <span class="${rangeClass}">${rangeText}</span></div>
+        </div>
+        <div class="tlw-pos-value">${formatUsd(p.value)}</div>
+        <div class="tlw-pos-pnl ${pnlClass}">${formatUsd(pnlVal)}</div>
+        <div class="tlw-pos-fee">${formatUsd(p.collectedFee)}</div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="tlw-positions-section">
+      <div class="tlw-positions-title">
+        Open Positions <span class="tlw-positions-count">${positions.length}</span>
+      </div>
+      <div class="tlw-pos-list">${items}</div>
+    </div>
+  `;
+}
+
+function renderRevenueView(owner, revenueData, overviewData, openingPositions, onBack) {
   const body = document.getElementById("tlw-body");
   const header = document.getElementById("tlw-header-content");
 
@@ -128,8 +264,14 @@ function renderRevenueView(owner, data, onBack) {
   // Hide controls
   document.getElementById("tlw-controls").style.display = "none";
 
+  const data = revenueData;
+
+  // Build overview card + opening positions
+  const overviewHtml = renderOverviewCard(overviewData);
+  const positionsHtml = renderOpeningPositions(openingPositions);
+
   if (!data || !data.length) {
-    body.innerHTML = '<div class="tlw-empty">No revenue data found for this wallet.</div>';
+    body.innerHTML = overviewHtml + positionsHtml + '<div class="tlw-empty">No revenue data found for this wallet.</div>';
     return;
   }
 
@@ -163,6 +305,8 @@ function renderRevenueView(owner, data, onBack) {
   }).join("");
 
   body.innerHTML = `
+    ${overviewHtml}
+    ${positionsHtml}
     <div class="tlw-revenue-summary">
       <div class="tlw-stat">
         <span class="tlw-stat-label">Cumulative PnL</span>
@@ -196,7 +340,7 @@ function renderRevenueView(owner, data, onBack) {
     </table>
   `;
 
-  // Range toggle handlers
+  // Range toggle handlers (re-fetch revenue only, keep overview)
   body.querySelectorAll(".tlw-range-btn").forEach(btn => {
     btn.addEventListener("click", async (e) => {
       const range = e.target.dataset.range;
@@ -205,8 +349,7 @@ function renderRevenueView(owner, data, onBack) {
       body.innerHTML = '<div class="tlw-loading">Loading...</div>';
       try {
         const result = await fetchRevenue(owner, "day", range);
-        renderRevenueView(owner, result.data, onBack);
-        // Re-activate the correct range button
+        renderRevenueView(owner, result.data, overviewData, openingPositions, onBack);
         const newBtn = body.querySelector(`.tlw-range-btn[data-range="${range}"]`);
         if (newBtn) {
           body.querySelectorAll(".tlw-range-btn").forEach(b => b.classList.remove("tlw-range-active"));
@@ -310,7 +453,7 @@ function restoreTableHeader() {
 
 async function showWalletRevenue(owner, restoreList) {
   const body = document.getElementById("tlw-body");
-  body.innerHTML = '<div class="tlw-loading">Loading revenue...</div>';
+  body.innerHTML = '<div class="tlw-loading">Loading wallet data...</div>';
 
   const onBack = () => {
     restoreTableHeader();
@@ -318,8 +461,18 @@ async function showWalletRevenue(owner, restoreList) {
   };
 
   try {
-    const result = await fetchRevenue(owner, "day", "7D");
-    renderRevenueView(owner, result.data, onBack);
+    const [revenueResult, overviewResult, openingResult] = await Promise.all([
+      fetchRevenue(owner, "day", "7D"),
+      fetchOverview(owner).catch(() => null),
+      fetchOpeningPositions(owner).catch(() => null),
+    ]);
+    renderRevenueView(
+      owner,
+      revenueResult.data,
+      overviewResult?.data ?? null,
+      openingResult?.data ?? null,
+      onBack
+    );
   } catch (err) {
     body.innerHTML = `<div class="tlw-error">Error: ${err.message}</div>`;
   }
