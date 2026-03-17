@@ -62,11 +62,11 @@ async function fetchTokenBalances(owner) {
   return apiRequest(`${API_BASE}/token/balance?owner=${owner}`);
 }
 
-async function fetchHistoricalPositions(owner) {
-  const now = new Date();
-  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const fromDate = weekAgo.toISOString();
-  return apiRequest(`${API_BASE}/lp-positions/historical?owner=${owner}&from_date=${fromDate}&limit=20`);
+async function fetchHistoricalPositions(owner, fromDate, toDate) {
+  let url = `${API_BASE}/lp-positions/historical?owner=${owner}&limit=20`;
+  if (fromDate) url += `&from_date=${fromDate.toISOString()}`;
+  if (toDate) url += `&to_date=${toDate.toISOString()}`;
+  return apiRequest(url);
 }
 
 function shortenAddress(addr) {
@@ -298,10 +298,10 @@ function renderTokenBalances(balances) {
   `;
 }
 
-function renderHistoricalPositions(positions) {
-  if (!positions || !positions.length) return "";
+function renderHistoricalPositionsList(positions) {
+  if (!positions || !positions.length) return '<div class="tlw-empty" style="padding:12px">No closed positions in this range.</div>';
 
-  const items = positions.map(p => {
+  return positions.map(p => {
     const pnlVal = p.pnl?.total ?? p.pnlNative ?? 0;
     const pnlClass = pnlVal >= 0 ? "tlw-positive" : "tlw-negative";
     const feeVal = p.collectedFee ?? p.fee ?? 0;
@@ -322,16 +322,212 @@ function renderHistoricalPositions(positions) {
       </div>
     `;
   }).join("");
+}
 
-  return `
-    <div class="tlw-positions-section">
-      <div class="tlw-positions-title">
-        Recent Closed Positions <span class="tlw-positions-count">${positions.length}</span>
-        <span class="tlw-hist-label">Last 7 days</span>
-      </div>
-      <div class="tlw-pos-list">${items}</div>
-    </div>
+function buildMiniCalendar(year, month, selectedDate, onSelect) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startDow = firstDay.getDay();
+  const daysInMonth = lastDay.getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  const container = document.createElement("div");
+  container.className = "tlw-cal";
+
+  // Header with month/year and nav
+  const header = document.createElement("div");
+  header.className = "tlw-cal-header";
+  header.innerHTML = `
+    <button class="tlw-cal-nav" data-dir="-1">&larr;</button>
+    <span class="tlw-cal-month">${monthNames[month]} ${year}</span>
+    <button class="tlw-cal-nav" data-dir="1">&rarr;</button>
   `;
+  container.appendChild(header);
+
+  // Day-of-week labels
+  const dowRow = document.createElement("div");
+  dowRow.className = "tlw-cal-dow";
+  ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].forEach(d => {
+    const cell = document.createElement("span");
+    cell.textContent = d;
+    dowRow.appendChild(cell);
+  });
+  container.appendChild(dowRow);
+
+  // Day grid
+  const grid = document.createElement("div");
+  grid.className = "tlw-cal-grid";
+
+  for (let i = 0; i < startDow; i++) {
+    const empty = document.createElement("span");
+    empty.className = "tlw-cal-day tlw-cal-empty";
+    grid.appendChild(empty);
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = document.createElement("button");
+    cell.className = "tlw-cal-day";
+    cell.textContent = d;
+    const cellDate = new Date(year, month, d);
+
+    if (cellDate > today) {
+      cell.classList.add("tlw-cal-disabled");
+      cell.disabled = true;
+    } else {
+      if (selectedDate && cellDate.toDateString() === selectedDate.toDateString()) {
+        cell.classList.add("tlw-cal-selected");
+      }
+      if (cellDate.toDateString() === today.toDateString()) {
+        cell.classList.add("tlw-cal-today");
+      }
+      cell.addEventListener("click", () => onSelect(cellDate));
+    }
+    grid.appendChild(cell);
+  }
+  container.appendChild(grid);
+
+  // Month nav handlers
+  header.querySelectorAll(".tlw-cal-nav").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const dir = parseInt(btn.dataset.dir);
+      let newMonth = month + dir;
+      let newYear = year;
+      if (newMonth < 0) { newMonth = 11; newYear--; }
+      if (newMonth > 11) { newMonth = 0; newYear++; }
+      const newCal = buildMiniCalendar(newYear, newMonth, selectedDate, onSelect);
+      container.replaceWith(newCal);
+    });
+  });
+
+  return container;
+}
+
+function initHistoricalSection(owner, initialPositions) {
+  const section = document.createElement("div");
+  section.className = "tlw-positions-section";
+
+  const now = new Date();
+  let selectedDay = null;
+
+  // Title row
+  const titleRow = document.createElement("div");
+  titleRow.className = "tlw-positions-title";
+
+  const titleText = document.createTextNode("Closed Positions ");
+  titleRow.appendChild(titleText);
+
+  const countBadge = document.createElement("span");
+  countBadge.className = "tlw-positions-count";
+  countBadge.textContent = initialPositions?.length ?? 0;
+  titleRow.appendChild(countBadge);
+
+  const rangeLabel = document.createElement("span");
+  rangeLabel.className = "tlw-hist-label";
+  rangeLabel.textContent = "Last 7 days";
+  titleRow.appendChild(rangeLabel);
+
+  const calToggle = document.createElement("button");
+  calToggle.className = "tlw-cal-toggle";
+  calToggle.innerHTML = "&#128197;";
+  titleRow.appendChild(calToggle);
+
+  section.appendChild(titleRow);
+
+  // Calendar dropdown (hidden by default)
+  const calWrap = document.createElement("div");
+  calWrap.className = "tlw-cal-wrap";
+  calWrap.style.display = "none";
+
+  // Quick presets
+  const presets = document.createElement("div");
+  presets.className = "tlw-cal-presets";
+  presets.innerHTML = `
+    <button class="tlw-cal-preset tlw-cal-preset-active" data-days="7">7D</button>
+    <button class="tlw-cal-preset" data-days="14">14D</button>
+    <button class="tlw-cal-preset" data-days="30">30D</button>
+  `;
+  calWrap.appendChild(presets);
+
+  const calContainer = document.createElement("div");
+  calContainer.className = "tlw-cal-container";
+  calWrap.appendChild(calContainer);
+
+  const calHint = document.createElement("div");
+  calHint.className = "tlw-cal-hint";
+  calHint.textContent = "Pick a day to see positions closed on that date";
+  calWrap.appendChild(calHint);
+
+  section.appendChild(calWrap);
+
+  // Positions list
+  const listEl = document.createElement("div");
+  listEl.className = "tlw-pos-list";
+  listEl.innerHTML = renderHistoricalPositionsList(initialPositions);
+  section.appendChild(listEl);
+
+  // Render calendar
+  function renderCal() {
+    const d = selectedDay || now;
+    const cal = buildMiniCalendar(d.getFullYear(), d.getMonth(), selectedDay, async (picked) => {
+      selectedDay = picked;
+      const dayStart = new Date(picked);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(picked);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      // Clear preset active
+      calWrap.querySelectorAll(".tlw-cal-preset").forEach(b => b.classList.remove("tlw-cal-preset-active"));
+      rangeLabel.textContent = formatDate(picked);
+
+      listEl.innerHTML = '<div class="tlw-loading" style="padding:12px">Loading...</div>';
+      try {
+        const result = await fetchHistoricalPositions(owner, dayStart, dayEnd);
+        const data = result?.data?.data ?? [];
+        listEl.innerHTML = renderHistoricalPositionsList(data);
+        countBadge.textContent = data.length;
+      } catch (err) {
+        listEl.innerHTML = `<div class="tlw-error" style="padding:12px">${err.message}</div>`;
+      }
+      renderCal();
+    });
+    calContainer.innerHTML = "";
+    calContainer.appendChild(cal);
+  }
+  renderCal();
+
+  // Toggle calendar visibility
+  calToggle.addEventListener("click", () => {
+    calWrap.style.display = calWrap.style.display === "none" ? "" : "none";
+  });
+
+  // Preset handlers
+  presets.querySelectorAll(".tlw-cal-preset").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const days = parseInt(btn.dataset.days);
+      selectedDay = null;
+      const fromDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+
+      presets.querySelectorAll(".tlw-cal-preset").forEach(b => b.classList.remove("tlw-cal-preset-active"));
+      btn.classList.add("tlw-cal-preset-active");
+      rangeLabel.textContent = `Last ${days} days`;
+
+      listEl.innerHTML = '<div class="tlw-loading" style="padding:12px">Loading...</div>';
+      try {
+        const result = await fetchHistoricalPositions(owner, fromDate, now);
+        const data = result?.data?.data ?? [];
+        listEl.innerHTML = renderHistoricalPositionsList(data);
+        countBadge.textContent = data.length;
+      } catch (err) {
+        listEl.innerHTML = `<div class="tlw-error" style="padding:12px">${err.message}</div>`;
+      }
+      renderCal();
+    });
+  });
+
+  return section;
 }
 
 function renderRevenueView(owner, revenueData, overviewData, openingPositions, tokenBalances, historicalPositions, onBack) {
@@ -351,14 +547,19 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
 
   const data = revenueData;
 
-  // Build overview card + token balances + positions
+  // Build static HTML sections
   const overviewHtml = renderOverviewCard(overviewData);
   const positionsHtml = renderOpeningPositions(openingPositions);
   const tokensHtml = renderTokenBalances(tokenBalances);
-  const historicalHtml = renderHistoricalPositions(historicalPositions);
 
   if (!data || !data.length) {
-    body.innerHTML = overviewHtml + tokensHtml + positionsHtml + historicalHtml + '<div class="tlw-empty">No revenue data found for this wallet.</div>';
+    body.innerHTML = overviewHtml + tokensHtml + positionsHtml;
+    // Append interactive historical section
+    body.appendChild(initHistoricalSection(owner, historicalPositions));
+    const emptyMsg = document.createElement("div");
+    emptyMsg.className = "tlw-empty";
+    emptyMsg.textContent = "No revenue data found for this wallet.";
+    body.appendChild(emptyMsg);
     return;
   }
 
@@ -391,11 +592,12 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
     `;
   }).join("");
 
+  // Set static HTML first
   body.innerHTML = `
     ${overviewHtml}
     ${tokensHtml}
     ${positionsHtml}
-    ${historicalHtml}
+    <div id="tlw-hist-anchor"></div>
     <div class="tlw-revenue-summary">
       <div class="tlw-stat">
         <span class="tlw-stat-label">Cumulative PnL</span>
@@ -429,7 +631,11 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, t
     </table>
   `;
 
-  // Range toggle handlers (re-fetch revenue only, keep overview)
+  // Insert interactive historical section at the anchor point
+  const anchor = document.getElementById("tlw-hist-anchor");
+  anchor.replaceWith(initHistoricalSection(owner, historicalPositions));
+
+  // Range toggle handlers (re-fetch revenue only, keep everything else)
   body.querySelectorAll(".tlw-range-btn").forEach(btn => {
     btn.addEventListener("click", async (e) => {
       const range = e.target.dataset.range;
@@ -549,13 +755,16 @@ async function showWalletRevenue(owner, restoreList) {
     restoreList();
   };
 
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
   try {
     const [revenueResult, overviewResult, openingResult, balancesResult, historicalResult] = await Promise.all([
       fetchRevenue(owner, "day", "7D"),
       fetchOverview(owner).catch(() => null),
       fetchOpeningPositions(owner).catch(() => null),
       fetchTokenBalances(owner).catch(() => null),
-      fetchHistoricalPositions(owner).catch(() => null),
+      fetchHistoricalPositions(owner, weekAgo, now).catch(() => null),
     ]);
     renderRevenueView(
       owner,
