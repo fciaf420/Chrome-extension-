@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Top LP Wallets",
+  "version": "1.0.0",
+  "description": "View top liquidity provider wallets on Meteora DLMM pools using LP Agent",
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.lpagent.io/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://app.meteora.ag/dlmm/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
