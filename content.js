@@ -34,6 +34,19 @@ async function fetchTopLpers(poolId, page = 1, limit = 20, sortOrder = "desc") {
   return res.json();
 }
 
+async function fetchRevenue(owner, period = "day", range = "7D") {
+  if (!canMakeRequest()) {
+    throw new Error("Rate limit reached (5 req/min). Please wait a moment.");
+  }
+  recordRequest();
+  const url = `${API_BASE}/lp-positions/revenue/${owner}?period=${period}&range=${range}`;
+  const res = await fetch(url, {
+    headers: { "x-api-key": API_KEY },
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 function shortenAddress(addr) {
   if (!addr) return "";
   return addr.slice(0, 4) + "..." + addr.slice(-4);
@@ -64,11 +77,11 @@ function createOverlay() {
   overlay.id = "tlw-overlay";
   overlay.innerHTML = `
     <div class="tlw-panel">
-      <div class="tlw-header">
-        <span class="tlw-title">Top LP Wallets</span>
+      <div class="tlw-header" id="tlw-header">
+        <span id="tlw-header-content"><span class="tlw-title">Top LP Wallets</span></span>
         <button class="tlw-close" id="tlw-close">&times;</button>
       </div>
-      <div class="tlw-controls">
+      <div class="tlw-controls" id="tlw-controls">
         <select id="tlw-sort">
           <option value="desc">Best First</option>
           <option value="asc">Worst First</option>
@@ -95,7 +108,118 @@ function createOverlay() {
   return overlay;
 }
 
-function renderTable(data) {
+function formatDate(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function renderRevenueView(owner, data, onBack) {
+  const body = document.getElementById("tlw-body");
+  const header = document.getElementById("tlw-header-content");
+
+  // Update header with back button
+  header.innerHTML = `
+    <button class="tlw-back" id="tlw-back">&larr;</button>
+    <span class="tlw-title">${shortenAddress(owner)} Revenue</span>
+    <a href="https://solscan.io/account/${owner}" target="_blank" rel="noopener" class="tlw-solscan-link">Solscan</a>
+  `;
+  document.getElementById("tlw-back").addEventListener("click", onBack);
+
+  // Hide controls
+  document.getElementById("tlw-controls").style.display = "none";
+
+  if (!data || !data.length) {
+    body.innerHTML = '<div class="tlw-empty">No revenue data found for this wallet.</div>';
+    return;
+  }
+
+  // Summary from latest data point
+  const latest = data[data.length - 1];
+  const totalPnl = latest.cumulative_pnl;
+  const totalPnlNative = latest.cumulative_pnl_native;
+  const pnlClass = totalPnl >= 0 ? "tlw-positive" : "tlw-negative";
+
+  // Bar chart using simple HTML bars
+  const maxAbsPnl = Math.max(...data.map(d => Math.abs(d.sum)), 1);
+
+  const rows = data.map(d => {
+    const barWidth = Math.min(Math.abs(d.sum) / maxAbsPnl * 100, 100);
+    const barClass = d.sum >= 0 ? "tlw-bar-positive" : "tlw-bar-negative";
+    const cumClass = d.cumulative_pnl >= 0 ? "tlw-positive" : "tlw-negative";
+    return `
+      <tr>
+        <td class="tlw-date">${formatDate(d.close_day)}</td>
+        <td class="tlw-bar-cell">
+          <div class="tlw-bar-container">
+            <div class="tlw-bar ${barClass}" style="width: ${barWidth}%"></div>
+          </div>
+        </td>
+        <td class="${d.sum >= 0 ? 'tlw-positive' : 'tlw-negative'}">${formatUsd(d.sum)}</td>
+        <td class="${cumClass}">${formatUsd(d.cumulative_pnl)}</td>
+        <td>${formatUsd(d.max_invested)}</td>
+        <td>${formatPercent(d.pnl_percent * 100)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  body.innerHTML = `
+    <div class="tlw-revenue-summary">
+      <div class="tlw-stat">
+        <span class="tlw-stat-label">Cumulative PnL</span>
+        <span class="tlw-stat-value ${pnlClass}">${formatUsd(totalPnl)}</span>
+      </div>
+      <div class="tlw-stat">
+        <span class="tlw-stat-label">PnL (Native/SOL)</span>
+        <span class="tlw-stat-value ${pnlClass}">${totalPnlNative != null ? totalPnlNative.toFixed(4) : '-'} SOL</span>
+      </div>
+      <div class="tlw-stat">
+        <span class="tlw-stat-label">Max Invested</span>
+        <span class="tlw-stat-value">${formatUsd(latest.max_invested)}</span>
+      </div>
+    </div>
+    <div class="tlw-range-toggle">
+      <button class="tlw-range-btn tlw-range-active" data-range="7D">7D</button>
+      <button class="tlw-range-btn" data-range="1M">1M</button>
+    </div>
+    <table class="tlw-table">
+      <thead>
+        <tr>
+          <th style="text-align:left">Date</th>
+          <th></th>
+          <th>Day PnL</th>
+          <th>Cum. PnL</th>
+          <th>Max Invested</th>
+          <th>PnL %</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  // Range toggle handlers
+  body.querySelectorAll(".tlw-range-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      const range = e.target.dataset.range;
+      body.querySelectorAll(".tlw-range-btn").forEach(b => b.classList.remove("tlw-range-active"));
+      e.target.classList.add("tlw-range-active");
+      body.innerHTML = '<div class="tlw-loading">Loading...</div>';
+      try {
+        const result = await fetchRevenue(owner, "day", range);
+        renderRevenueView(owner, result.data, onBack);
+        // Re-activate the correct range button
+        const newBtn = body.querySelector(`.tlw-range-btn[data-range="${range}"]`);
+        if (newBtn) {
+          body.querySelectorAll(".tlw-range-btn").forEach(b => b.classList.remove("tlw-range-active"));
+          newBtn.classList.add("tlw-range-active");
+        }
+      } catch (err) {
+        body.innerHTML = `<div class="tlw-error">Error: ${err.message}</div>`;
+      }
+    });
+  });
+}
+
+function renderTable(data, onWalletClick) {
   const body = document.getElementById("tlw-body");
   if (!data || !data.length) {
     body.innerHTML = '<div class="tlw-empty">No LP data found for this pool.</div>';
@@ -106,12 +230,10 @@ function renderTable(data) {
     const pnlClass = lp.total_pnl >= 0 ? "tlw-positive" : "tlw-negative";
     const roiClass = lp.roi >= 0 ? "tlw-positive" : "tlw-negative";
     return `
-      <tr>
+      <tr class="tlw-clickable" data-owner="${lp.owner}">
         <td class="tlw-rank">${lp._rank}</td>
         <td class="tlw-address">
-          <a href="https://solscan.io/account/${lp.owner}" target="_blank" rel="noopener">
-            ${shortenAddress(lp.owner)}
-          </a>
+          ${shortenAddress(lp.owner)}
         </td>
         <td>${formatUsd(lp.total_inflow)}</td>
         <td>${formatUsd(lp.total_fee)}</td>
@@ -142,9 +264,16 @@ function renderTable(data) {
       <tbody>${rows}</tbody>
     </table>
   `;
+
+  // Attach click handlers to rows
+  body.querySelectorAll(".tlw-clickable").forEach(row => {
+    row.addEventListener("click", () => {
+      onWalletClick(row.dataset.owner);
+    });
+  });
 }
 
-async function loadPage(poolId, page, sortOrder) {
+async function loadPage(poolId, page, sortOrder, onWalletClick) {
   const body = document.getElementById("tlw-body");
   body.innerHTML = '<div class="tlw-loading">Loading...</div>';
 
@@ -156,7 +285,7 @@ async function loadPage(poolId, page, sortOrder) {
       lp._rank = (pagination.page - 1) * pagination.pageSize + i + 1;
     });
 
-    renderTable(data);
+    renderTable(data, onWalletClick);
 
     const pageInfo = document.getElementById("tlw-page-info");
     pageInfo.textContent = `Page ${pagination.page} of ${pagination.totalPages} (${pagination.totalCount} LPers)`;
@@ -173,13 +302,38 @@ async function loadPage(poolId, page, sortOrder) {
   }
 }
 
+function restoreTableHeader() {
+  const header = document.getElementById("tlw-header-content");
+  header.innerHTML = '<span class="tlw-title">Top LP Wallets</span>';
+  document.getElementById("tlw-controls").style.display = "";
+}
+
+async function showWalletRevenue(owner, restoreList) {
+  const body = document.getElementById("tlw-body");
+  body.innerHTML = '<div class="tlw-loading">Loading revenue...</div>';
+
+  const onBack = () => {
+    restoreTableHeader();
+    restoreList();
+  };
+
+  try {
+    const result = await fetchRevenue(owner, "day", "7D");
+    renderRevenueView(owner, result.data, onBack);
+  } catch (err) {
+    body.innerHTML = `<div class="tlw-error">Error: ${err.message}</div>`;
+  }
+}
+
 function initOverlay(poolId) {
   createOverlay();
 
   let currentPage = 1;
   let sortOrder = "desc";
 
-  const load = () => loadPage(poolId, currentPage, sortOrder);
+  const load = () => loadPage(poolId, currentPage, sortOrder, (owner) => {
+    showWalletRevenue(owner, load);
+  });
 
   document.getElementById("tlw-prev").addEventListener("click", () => {
     if (currentPage > 1) { currentPage--; load(); }

@@ -223,3 +223,138 @@
   background: #252640;
   border-bottom: 1px solid #2d2e4a;
 }
+
+/* Clickable rows */
+.tlw-clickable {
+  cursor: pointer;
+}
+
+.tlw-clickable .tlw-address {
+  color: #818cf8;
+  font-family: monospace;
+}
+
+/* Back button */
+.tlw-back {
+  background: none;
+  border: 1px solid #3d3e5c;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  margin-right: 12px;
+}
+
+.tlw-back:hover {
+  background: #252640;
+}
+
+/* Solscan link in header */
+.tlw-solscan-link {
+  color: #818cf8;
+  text-decoration: none;
+  font-size: 13px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.tlw-solscan-link:hover {
+  text-decoration: underline;
+}
+
+/* Header content layout */
+#tlw-header-content {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+/* Revenue summary */
+.tlw-revenue-summary {
+  display: flex;
+  gap: 24px;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2d2e4a;
+}
+
+.tlw-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tlw-stat-label {
+  color: #94a3b8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tlw-stat-value {
+  color: #e2e8f0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+/* Range toggle */
+.tlw-range-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #2d2e4a;
+}
+
+.tlw-range-btn {
+  background: #252640;
+  color: #94a3b8;
+  border: 1px solid #3d3e5c;
+  border-radius: 6px;
+  padding: 4px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tlw-range-btn:hover {
+  color: #e2e8f0;
+}
+
+.tlw-range-active {
+  background: #6366f1;
+  color: #fff;
+  border-color: #6366f1;
+}
+
+/* Bar chart in table */
+.tlw-bar-cell {
+  width: 120px;
+}
+
+.tlw-bar-container {
+  width: 100%;
+  height: 14px;
+  background: #252640;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.tlw-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s;
+}
+
+.tlw-bar-positive {
+  background: #4ade80;
+}
+
+.tlw-bar-negative {
+  background: #f87171;
+}
+
+.tlw-date {
+  text-align: left !important;
+  color: #94a3b8;
+  white-space: nowrap;
+}
