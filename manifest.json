@@ -7,7 +7,7 @@
   "host_permissions": ["https://api.lpagent.io/*"],
   "content_scripts": [
     {
-      "matches": ["https://app.meteora.ag/dlmm/*"],
+      "matches": ["https://app.meteora.ag/dlmm/*", "https://www.meteora.ag/dlmm/*"],
       "js": ["content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
