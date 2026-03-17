@@ -58,6 +58,17 @@ async function fetchOpeningPositions(owner) {
   return apiRequest(`${API_BASE}/lp-positions/opening?owner=${owner}`);
 }
 
+async function fetchTokenBalances(owner) {
+  return apiRequest(`${API_BASE}/token/balance?owner=${owner}`);
+}
+
+async function fetchHistoricalPositions(owner) {
+  const now = new Date();
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const fromDate = weekAgo.toISOString();
+  return apiRequest(`${API_BASE}/lp-positions/historical?owner=${owner}&from_date=${fromDate}&limit=20`);
+}
+
 function shortenAddress(addr) {
   if (!addr) return "";
   return addr.slice(0, 4) + "..." + addr.slice(-4);
@@ -249,7 +260,81 @@ function renderOpeningPositions(positions) {
   `;
 }
 
-function renderRevenueView(owner, revenueData, overviewData, openingPositions, onBack) {
+function renderTokenBalances(balances) {
+  if (!balances || !balances.length) return "";
+
+  // Sort by USD value descending, filter out dust
+  const sorted = balances
+    .filter(t => t.balanceInUsd > 0.01)
+    .sort((a, b) => (b.balanceInUsd || 0) - (a.balanceInUsd || 0));
+
+  if (!sorted.length) return "";
+
+  const totalUsd = sorted.reduce((s, t) => s + (t.balanceInUsd || 0), 0);
+
+  const items = sorted.slice(0, 12).map(t => {
+    const pct = totalUsd > 0 ? ((t.balanceInUsd / totalUsd) * 100).toFixed(1) : "0";
+    return `
+      <div class="tlw-token-item">
+        <img class="tlw-token-logo" src="${t.logo || ''}" alt="" onerror="this.style.display='none'">
+        <div class="tlw-token-name">${t.symbol || shortenAddress(t.tokenAddress)}</div>
+        <div class="tlw-token-bal">${Number(t.balance).toLocaleString(undefined, { maximumFractionDigits: 4 })}</div>
+        <div class="tlw-token-usd">${formatUsd(t.balanceInUsd)}</div>
+        <div class="tlw-token-pct">${pct}%</div>
+      </div>
+    `;
+  }).join("");
+
+  const moreText = sorted.length > 12 ? `<div class="tlw-token-more">+${sorted.length - 12} more tokens</div>` : "";
+
+  return `
+    <div class="tlw-tokens-section">
+      <div class="tlw-positions-title">
+        Wallet Holdings <span class="tlw-positions-count">${formatUsd(totalUsd)}</span>
+      </div>
+      <div class="tlw-token-list">${items}</div>
+      ${moreText}
+    </div>
+  `;
+}
+
+function renderHistoricalPositions(positions) {
+  if (!positions || !positions.length) return "";
+
+  const items = positions.map(p => {
+    const pnlVal = p.pnl?.total ?? p.pnlNative ?? 0;
+    const pnlClass = pnlVal >= 0 ? "tlw-positive" : "tlw-negative";
+    const feeVal = p.collectedFee ?? p.fee ?? 0;
+    const ageText = p.age ? p.age + "d" : "-";
+    return `
+      <div class="tlw-pos-item">
+        <div class="tlw-pos-logos">
+          <img src="${p.logo0 || ''}" alt="" onerror="this.style.display='none'">
+          <img src="${p.logo1 || ''}" alt="" onerror="this.style.display='none'">
+        </div>
+        <div>
+          <div class="tlw-pos-pair">${p.pairName || (p.tokenName0 + "/" + p.tokenName1)}</div>
+          <div class="tlw-pos-detail">${ageText} · Closed ${p.closeAt ? formatDate(p.closeAt) : "-"}</div>
+        </div>
+        <div class="tlw-pos-value">${formatUsd(p.inputValue)}</div>
+        <div class="tlw-pos-pnl ${pnlClass}">${formatUsd(pnlVal)}</div>
+        <div class="tlw-pos-fee">${formatUsd(feeVal)}</div>
+      </div>
+    `;
+  }).join("");
+
+  return `
+    <div class="tlw-positions-section">
+      <div class="tlw-positions-title">
+        Recent Closed Positions <span class="tlw-positions-count">${positions.length}</span>
+        <span class="tlw-hist-label">Last 7 days</span>
+      </div>
+      <div class="tlw-pos-list">${items}</div>
+    </div>
+  `;
+}
+
+function renderRevenueView(owner, revenueData, overviewData, openingPositions, tokenBalances, historicalPositions, onBack) {
   const body = document.getElementById("tlw-body");
   const header = document.getElementById("tlw-header-content");
 
@@ -266,12 +351,14 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, o
 
   const data = revenueData;
 
-  // Build overview card + opening positions
+  // Build overview card + token balances + positions
   const overviewHtml = renderOverviewCard(overviewData);
   const positionsHtml = renderOpeningPositions(openingPositions);
+  const tokensHtml = renderTokenBalances(tokenBalances);
+  const historicalHtml = renderHistoricalPositions(historicalPositions);
 
   if (!data || !data.length) {
-    body.innerHTML = overviewHtml + positionsHtml + '<div class="tlw-empty">No revenue data found for this wallet.</div>';
+    body.innerHTML = overviewHtml + tokensHtml + positionsHtml + historicalHtml + '<div class="tlw-empty">No revenue data found for this wallet.</div>';
     return;
   }
 
@@ -306,7 +393,9 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, o
 
   body.innerHTML = `
     ${overviewHtml}
+    ${tokensHtml}
     ${positionsHtml}
+    ${historicalHtml}
     <div class="tlw-revenue-summary">
       <div class="tlw-stat">
         <span class="tlw-stat-label">Cumulative PnL</span>
@@ -349,7 +438,7 @@ function renderRevenueView(owner, revenueData, overviewData, openingPositions, o
       body.innerHTML = '<div class="tlw-loading">Loading...</div>';
       try {
         const result = await fetchRevenue(owner, "day", range);
-        renderRevenueView(owner, result.data, overviewData, openingPositions, onBack);
+        renderRevenueView(owner, result.data, overviewData, openingPositions, tokenBalances, historicalPositions, onBack);
         const newBtn = body.querySelector(`.tlw-range-btn[data-range="${range}"]`);
         if (newBtn) {
           body.querySelectorAll(".tlw-range-btn").forEach(b => b.classList.remove("tlw-range-active"));
@@ -461,16 +550,20 @@ async function showWalletRevenue(owner, restoreList) {
   };
 
   try {
-    const [revenueResult, overviewResult, openingResult] = await Promise.all([
+    const [revenueResult, overviewResult, openingResult, balancesResult, historicalResult] = await Promise.all([
       fetchRevenue(owner, "day", "7D"),
       fetchOverview(owner).catch(() => null),
       fetchOpeningPositions(owner).catch(() => null),
+      fetchTokenBalances(owner).catch(() => null),
+      fetchHistoricalPositions(owner).catch(() => null),
     ]);
     renderRevenueView(
       owner,
       revenueResult.data,
       overviewResult?.data ?? null,
       openingResult?.data ?? null,
+      balancesResult?.data ?? null,
+      historicalResult?.data?.data ?? null,
       onBack
     );
   } catch (err) {

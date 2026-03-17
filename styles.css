@@ -500,3 +500,74 @@
   font-size: 10px;
   font-weight: 600;
 }
+
+/* Token balances */
+.tlw-tokens-section {
+  padding: 14px 20px;
+  border-bottom: 1px solid #2d2e4a;
+}
+
+.tlw-token-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tlw-token-item {
+  display: grid;
+  grid-template-columns: 20px 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: #252640;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.tlw-token-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.tlw-token-name {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.tlw-token-bal {
+  color: #94a3b8;
+  text-align: right;
+  font-size: 11px;
+}
+
+.tlw-token-usd {
+  color: #e2e8f0;
+  font-weight: 600;
+  text-align: right;
+  min-width: 70px;
+}
+
+.tlw-token-pct {
+  color: #64748b;
+  text-align: right;
+  font-size: 11px;
+  min-width: 36px;
+}
+
+.tlw-token-more {
+  color: #64748b;
+  font-size: 11px;
+  text-align: center;
+  padding: 6px 0 2px;
+}
+
+/* Historical label */
+.tlw-hist-label {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+}
