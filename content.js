@@ -92,7 +92,7 @@ function ovVal(field) {
   if (field == null) return null;
   if (typeof field === "number") return field;
   if (typeof field === "object") {
-    for (const k of ["all", "total", "7D", "1M", "30D"]) {
+    for (const k of ["ALL", "all", "total", "7D", "1M", "30D"]) {
       if (field[k] != null) return field[k];
     }
     const vals = Object.values(field).filter(v => typeof v === "number");
@@ -1041,7 +1041,7 @@ async function showWalletRevenue(owner, restoreList) {
     renderRevenueView(
       owner,
       revenueResult.data,
-      overviewResult?.data ?? null,
+      Array.isArray(overviewResult?.data) ? overviewResult.data[0] : (overviewResult?.data ?? null),
       openingResult?.data ?? null,
       balancesResult?.data ?? null,
       historicalResult?.data?.data ?? null,
