@@ -916,6 +916,22 @@ function computePoolScore(lp) {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+// Column definitions for sortable table
+const TABLE_COLUMNS = [
+  { key: "_rank", label: "#", sortable: false },
+  { key: "owner", label: "Wallet", sortable: false },
+  { key: "total_inflow", label: "Inflow", sortable: true },
+  { key: "total_fee", label: "Fees", sortable: true },
+  { key: "total_pnl", label: "PnL", sortable: true },
+  { key: "roi", label: "ROI", sortable: true },
+  { key: "win_rate", label: "Win Rate", sortable: true },
+  { key: "total_lp", label: "LPs", sortable: true },
+  { key: "avg_age_hour", label: "Avg Age", sortable: true },
+];
+
+let tableSortCol = null;
+let tableSortDir = "desc";
+
 function renderTable(data, onWalletClick) {
   const body = document.getElementById("tlw-body");
   if (!data || !data.length) {
@@ -923,18 +939,24 @@ function renderTable(data, onWalletClick) {
     return;
   }
 
-  const rows = data.map((lp, i) => {
+  // Sort data client-side if a column is selected
+  let sorted = [...data];
+  if (tableSortCol) {
+    sorted.sort((a, b) => {
+      const av = a[tableSortCol] ?? -Infinity;
+      const bv = b[tableSortCol] ?? -Infinity;
+      return tableSortDir === "asc" ? av - bv : bv - av;
+    });
+  }
+
+  const rows = sorted.map((lp, i) => {
     const pnlClass = lp.total_pnl >= 0 ? "tlw-positive" : "tlw-negative";
     const roiClass = lp.roi >= 0 ? "tlw-positive" : "tlw-negative";
-    const score = computePoolScore(lp);
-    const si = getScoreLabel(score);
+    const rank = tableSortCol ? i + 1 : lp._rank;
     return `
       <tr class="tlw-clickable" data-owner="${lp.owner}">
-        <td class="tlw-rank">${lp._rank}</td>
-        <td class="tlw-address">
-          ${shortenAddress(lp.owner)}
-        </td>
-        <td class="tlw-score-cell"><span class="tlw-score-pill" style="background:${si.color}20;color:${si.color}">${score} ${si.label}</span></td>
+        <td class="tlw-rank">${rank}</td>
+        <td class="tlw-address">${shortenAddress(lp.owner)}</td>
         <td>${formatUsd(lp.total_inflow)}</td>
         <td>${formatUsd(lp.total_fee)}</td>
         <td class="${pnlClass}">${formatUsd(lp.total_pnl)}</td>
@@ -946,25 +968,35 @@ function renderTable(data, onWalletClick) {
     `;
   }).join("");
 
+  const headers = TABLE_COLUMNS.map(col => {
+    if (!col.sortable) return `<th>${col.label}</th>`;
+    let arrow = "&#8597;"; // up-down arrow (unsorted)
+    if (tableSortCol === col.key) {
+      arrow = tableSortDir === "asc" ? "&#9650;" : "&#9660;";
+    }
+    return `<th class="tlw-sortable" data-sort-key="${col.key}">${col.label} <span class="tlw-sort-arrow">${arrow}</span></th>`;
+  }).join("");
+
   body.innerHTML = `
     <table class="tlw-table">
-      <thead>
-        <tr>
-          <th>#</th>
-          <th>Wallet</th>
-          <th>Score</th>
-          <th>Inflow</th>
-          <th>Fees</th>
-          <th>PnL</th>
-          <th>ROI</th>
-          <th>Win Rate</th>
-          <th>LPs</th>
-          <th>Avg Age</th>
-        </tr>
-      </thead>
+      <thead><tr>${headers}</tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
+
+  // Sort click handlers
+  body.querySelectorAll(".tlw-sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sortKey;
+      if (tableSortCol === key) {
+        tableSortDir = tableSortDir === "desc" ? "asc" : "desc";
+      } else {
+        tableSortCol = key;
+        tableSortDir = "desc";
+      }
+      renderTable(data, onWalletClick);
+    });
+  });
 
   // Attach click handlers to rows
   body.querySelectorAll(".tlw-clickable").forEach(row => {
@@ -986,6 +1018,9 @@ async function loadPage(poolId, page, sortOrder, onWalletClick) {
       lp._rank = (pagination.page - 1) * pagination.pageSize + i + 1;
     });
 
+    // Reset client-side sort when loading new API page
+    tableSortCol = null;
+    tableSortDir = "desc";
     renderTable(data, onWalletClick);
 
     const pageInfo = document.getElementById("tlw-page-info");
